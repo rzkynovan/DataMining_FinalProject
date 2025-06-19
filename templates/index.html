@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>🔬 AI-Powered Steel Defect Detection</title>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+
+      body {
+        font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        min-height: 100vh;
+        padding: 20px;
+      }
+
+      .container {
+        max-width: 1200px;
+        margin: 0 auto;
+        background: white;
+        border-radius: 20px;
+        box-shadow: 0 20px 60px rgba(0, 0, 0, 0.1);
+        overflow: hidden;
+      }
+
+      header {
+        background: linear-gradient(135deg, #2c3e50 0%, #34495e 100%);
+        color: white;
+        padding: 40px;
+        text-align: center;
+      }
+
+      header h1 {
+        font-size: 2.5rem;
+        margin-bottom: 10px;
+        font-weight: 700;
+      }
+
+      .upload-section {
+        padding: 40px;
+      }
+
+      .upload-area {
+        border: 3px dashed #ddd;
+        border-radius: 15px;
+        padding: 60px 20px;
+        text-align: center;
+        transition: all 0.3s ease;
+        cursor: pointer;
+      }
+
+      .upload-area:hover {
+        border-color: #667eea;
+        background-color: #f8f9ff;
+      }
+
+      .upload-btn {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        border: none;
+        padding: 12px 30px;
+        border-radius: 25px;
+        font-size: 1rem;
+        cursor: pointer;
+        transition: all 0.3s ease;
+      }
+
+      .results-section {
+        padding: 40px;
+        background-color: #f8f9fa;
+      }
+
+      .result-card {
+        background: white;
+        border-radius: 15px;
+        padding: 30px;
+        margin-bottom: 20px;
+        box-shadow: 0 5px 20px rgba(0, 0, 0, 0.1);
+      }
+
+      .error {
+        color: #e74c3c;
+        background-color: #fdf2f2;
+        padding: 15px;
+        border-radius: 10px;
+        border-left: 4px solid #e74c3c;
+      }
+
+      .success {
+        color: #27ae60;
+        background-color: #f2f8f5;
+        padding: 15px;
+        border-radius: 10px;
+        border-left: 4px solid #27ae60;
+      }
+
+      .loading {
+        text-align: center;
+        padding: 20px;
+        color: #7f8c8d;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <header>
+        <h1>🔬 AI-Powered Steel Defect Detection</h1>
+        <p>
+          Advanced machine learning for quality control in steel manufacturing
+        </p>
+      </header>
+
+      <div class="upload-section">
+        <div
+          class="upload-area"
+          onclick="document.getElementById('fileInput').click()"
+        >
+          <div class="upload-content">
+            <div style="font-size: 4rem; margin-bottom: 20px">📁</div>
+            <h3>Upload Steel Image</h3>
+            <p>Click here to select your image file</p>
+            <input
+              type="file"
+              id="fileInput"
+              accept="image/*"
+              style="display: none"
+            />
+            <button class="upload-btn">Choose File</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="results-section" id="resultsSection" style="display: none">
+        <h2>🔍 Detection Results</h2>
+
+        <div class="result-card">
+          <h3>📊 Classification Result</h3>
+          <div id="classificationOutput">
+            <div class="loading">🔄 Processing...</div>
+          </div>
+        </div>
+
+        <div class="result-card">
+          <h3>🎯 Segmentation Result</h3>
+          <div id="segmentationOutput">
+            <div class="loading">🔄 Processing...</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      document
+        .getElementById("fileInput")
+        .addEventListener("change", function (event) {
+          const file = event.target.files[0];
+          if (file) {
+            document.getElementById("resultsSection").style.display = "block";
+            processImage(file);
+          }
+        });
+
+      async function processImage(file) {
+        console.log("🚀 Starting image processing...");
+
+        // Process Classification
+        await processClassification(file);
+
+        // Process Segmentation
+        await processSegmentation(file);
+      }
+
+      async function processClassification(file) {
+        const formData = new FormData();
+        formData.append("file", file);
+
+        try {
+          console.log("📤 Sending classification request...");
+          const response = await fetch("/predict/classification", {
+            method: "POST",
+            body: formData,
+          });
+
+          const result = await response.json();
+          console.log("📥 Classification response:", result);
+
+          if (result.error) {
+            document.getElementById(
+              "classificationOutput"
+            ).innerHTML = `<div class="error">❌ Error: ${result.error}</div>`;
+          } else {
+            document.getElementById("classificationOutput").innerHTML = `
+                        <div class="success">
+                            <h4>🎯 ${result.class_name}</h4>
+                            <p>Confidence: ${result.confidence}%</p>
+                            <p>Class ID: ${result.prediction}</p>
+                        </div>
+                    `;
+          }
+        } catch (error) {
+          console.error("❌ Classification error:", error);
+          document.getElementById(
+            "classificationOutput"
+          ).innerHTML = `<div class="error">❌ Network Error: ${error.message}</div>`;
+        }
+      }
+
+      async function processSegmentation(file) {
+        const formData = new FormData();
+        formData.append("file", file);
+
+        try {
+          console.log("📤 Sending segmentation request...");
+          const response = await fetch("/predict/segmentation", {
+            method: "POST",
+            body: formData,
+          });
+
+          const result = await response.json();
+          console.log("📥 Segmentation response:", result);
+
+          if (result.error) {
+            document.getElementById(
+              "segmentationOutput"
+            ).innerHTML = `<div class="error">❌ Error: ${result.error}</div>`;
+          } else {
+            // Create defect summary
+            let defectSummary = "";
+            for (const [className, count] of Object.entries(
+              result.defect_counts
+            )) {
+              if (count > 0) {
+                defectSummary += `<li><strong>${className}:</strong> ${count} defects</li>`;
+              }
+            }
+
+            document.getElementById("segmentationOutput").innerHTML = `
+                <div class="success">
+                    <h4>✅ Segmentation Completed</h4>
+                    <div style="margin: 20px 0;">
+                        <img src="data:image/png;base64,${
+                          result.visualization
+                        }" 
+                             style="max-width: 100%; border-radius: 10px; box-shadow: 0 4px 8px rgba(0,0,0,0.1);"
+                             alt="Segmentation Result">
+                    </div>
+                    <div style="background: #f8f9fa; padding: 15px; border-radius: 8px;">
+                        <h5>🔍 Detected Defects:</h5>
+                        <ul style="margin: 10px 0; padding-left: 20px;">
+                            ${defectSummary || "<li>No defects detected</li>"}
+                        </ul>
+                        <p><small>Output Shape: ${result.shape.join(
+                          " × "
+                        )}</small></p>
+                    </div>
+                </div>
+            `;
+          }
+        } catch (error) {
+          console.error("❌ Segmentation error:", error);
+          document.getElementById(
+            "segmentationOutput"
+          ).innerHTML = `<div class="error">❌ Network Error: ${error.message}</div>`;
+        }
+      }
+    </script>
+  </body>
+</html>

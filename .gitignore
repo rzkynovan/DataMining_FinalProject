@@ -1,0 +1,22 @@
+# Model files (too large for GitHub)
+models/*.pth
+models/*.pt
+*.pth
+*.pt
+
+# Other common ignores
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+.env
+uploads/
+*.log
+
+# OS specific
+.DS_Store
+Thumbs.db
