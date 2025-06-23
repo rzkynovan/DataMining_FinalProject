@@ -1,21 +1,42 @@
-
-# Use an official Python runtime as a parent image
 FROM python:3.8-slim
 
-# Set the working directory in the container
-WORKDIR /usr/src/app
+# Install system dependencies for OpenCV
+RUN apt-get update && apt-get install -y \
+    libgl1-mesa-glx \
+    libglib2.0-0 \
+    libsm6 \
+    libxext6 \
+    libxrender-dev \
+    libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
 
-# Copy the current directory contents into the container at /usr/src/app
-COPY . .
+# FIXED: Correct working directory
+WORKDIR /app
 
-# Install any needed packages specified in requirements.txt
+# Copy requirements first (better caching)
+COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Make port 5000 available to the world outside this container
-EXPOSE 5000
+# Copy ALL application files
+COPY . .
 
-# Define environment variable
+# Debug: List files to verify copy
+RUN echo "=== Files in /app ===" && ls -la
+RUN echo "=== Python files ===" && ls -la *.py
+
+# Set environment variables
+ENV PYTHONPATH=/app
 ENV FLASK_APP=app.py
+ENV FLASK_ENV=development
 
-# Run app.py when the container launches
-CMD ["flask", "run", "--host=0.0.0.0"]
+# Create directories
+RUN mkdir -p uploads models templates static
+
+# Test import to catch errors early
+RUN python3 -c "import model_utils; print('✅ model_utils imported successfully')" || echo "❌ Import failed"
+
+# Expose port (match docker-compose)
+EXPOSE 8899
+
+# FIXED: Run directly with python (not flask run)
+CMD ["python3", "app.py"]

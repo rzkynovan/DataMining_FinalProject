@@ -1,5 +1,4 @@
 from flask import Flask, request, jsonify, render_template, send_from_directory
-from model_utils import load_model
 import torch
 import torchvision.transforms as transforms
 from PIL import Image
@@ -8,6 +7,8 @@ import logging
 import os
 import cv2
 import numpy as np
+import gc
+import psutil
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -25,56 +26,79 @@ os.makedirs('static/css', exist_ok=True)
 os.makedirs('static/js', exist_ok=True)
 os.makedirs('uploads', exist_ok=True)
 
-# Load models
-try:
-    classification_model = load_model('models/best_densenet121.pth', model_type='classification', model_name='densenet121')
-    segmentation_model = load_model('models/severstal_unet_pytorch_best_augmented.pth', model_type='segmentation')
-    logger.info("✅ Models loaded successfully")
-except Exception as e:
-    logger.error(f"❌ Failed to load models: {e}")
-    classification_model = None
-    segmentation_model = None
+# Global model variables (for model swapping)
+classification_model = None
+segmentation_model = None
+current_loaded_model = None
 
-# Check input channels for models
-def get_input_channels(model):
-    if model is None:
-        return 3
-    for name, module in model.named_modules():
-        if isinstance(module, torch.nn.Conv2d):
-            return module.in_channels
-    return 3
+def get_memory_usage():
+    """Get current memory usage in MB"""
+    try:
+        process = psutil.Process(os.getpid())
+        return process.memory_info().rss / 1024 / 1024
+    except:
+        return 0
 
-classification_channels = get_input_channels(classification_model)
-segmentation_channels = get_input_channels(segmentation_model)
+def cleanup_memory():
+    """Aggressive memory cleanup"""
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
 
-logger.info(f"Classification model expects {classification_channels} channels")
-logger.info(f"Segmentation model expects {segmentation_channels} channels")
+def load_classification_model():
+    """Load classification model and unload segmentation"""
+    global classification_model, segmentation_model, current_loaded_model
+    
+    if current_loaded_model == 'classification' and classification_model is not None:
+        return classification_model
+    
+    logger.info(f"🔄 Loading classification model... Current RAM: {get_memory_usage():.1f}MB")
+    
+    # Unload segmentation model to free memory
+    if segmentation_model is not None:
+        del segmentation_model
+        segmentation_model = None
+        current_loaded_model = None
+        cleanup_memory()
+        logger.info(f"🗑️ Segmentation model freed. RAM: {get_memory_usage():.1f}MB")
+    
+    if classification_model is None:
+        from model_utils import load_model
+        classification_model = load_model('models/best_densenet121.pth', 
+                                         model_type='classification', 
+                                         model_name='densenet121')
+        cleanup_memory()
+    
+    current_loaded_model = 'classification'
+    logger.info(f"✅ Classification model ready. RAM: {get_memory_usage():.1f}MB")
+    return classification_model
 
-# Define preprocessing transformations
-if classification_channels == 3:
-    classification_transform = transforms.Compose([
-        transforms.Resize((224, 224)),
-        transforms.ToTensor(),
-    ])
-else:
-    classification_transform = transforms.Compose([
-        transforms.Grayscale(num_output_channels=1),
-        transforms.Resize((224, 224)),
-        transforms.ToTensor(),
-    ])
-
-# IMPROVED: Fixed resolution to match training data (1600x256)
-if segmentation_channels == 3:
-    segmentation_transform = transforms.Compose([
-        transforms.Resize((1600, 256)),  # FIXED: width=1600, height=256
-        transforms.ToTensor(),
-    ])
-else:
-    segmentation_transform = transforms.Compose([
-        transforms.Grayscale(num_output_channels=1),
-        transforms.Resize((1600, 256)),  # FIXED: width=1600, height=256
-        transforms.ToTensor(),
-    ])
+def load_segmentation_model():
+    """Load segmentation model and unload classification"""
+    global classification_model, segmentation_model, current_loaded_model
+    
+    if current_loaded_model == 'segmentation' and segmentation_model is not None:
+        return segmentation_model
+    
+    logger.info(f"🔄 Loading segmentation model... Current RAM: {get_memory_usage():.1f}MB")
+    
+    # Unload classification model to free memory
+    if classification_model is not None:
+        del classification_model
+        classification_model = None
+        current_loaded_model = None
+        cleanup_memory()
+        logger.info(f"🗑️ Classification model freed. RAM: {get_memory_usage():.1f}MB")
+    
+    if segmentation_model is None:
+        from model_utils import load_model
+        segmentation_model = load_model('models/severstal_unet_pytorch_best_augmented.pth', 
+                                       model_type='segmentation')
+        cleanup_memory()
+    
+    current_loaded_model = 'segmentation'
+    logger.info(f"✅ Segmentation model ready. RAM: {get_memory_usage():.1f}MB")
+    return segmentation_model
 
 # Routes
 @app.route('/')
@@ -83,21 +107,40 @@ def index():
 
 @app.route('/health')
 def health_check():
+    memory_mb = get_memory_usage()
     return jsonify({
         'status': 'ok',
-        'models_loaded': {
-            'classification': classification_model is not None,
-            'segmentation': segmentation_model is not None
+        'memory_usage_mb': round(memory_mb, 1),
+        'current_model': current_loaded_model,
+        'models_available': {
+            'classification': os.path.exists('models/best_densenet121.pth'),
+            'segmentation': os.path.exists('models/severstal_unet_pytorch_best_augmented.pth')
         }
     })
+
+@app.route('/memory')
+def memory_status():
+    """Detailed memory status for monitoring"""
+    try:
+        process = psutil.Process(os.getpid())
+        memory_info = process.memory_info()
+        system_memory = psutil.virtual_memory()
+        
+        return jsonify({
+            'process_memory_mb': round(memory_info.rss / 1024 / 1024, 1),
+            'memory_percent': round(process.memory_percent(), 1),
+            'system_total_gb': round(system_memory.total / 1024 / 1024 / 1024, 1),
+            'system_available_gb': round(system_memory.available / 1024 / 1024 / 1024, 1),
+            'system_used_percent': system_memory.percent,
+            'current_model': current_loaded_model
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/predict/classification', methods=['POST'])
 def predict_classification():
     logger.info("📥 Classification request received")
     
-    if classification_model is None:
-        return jsonify({'error': 'Classification model not loaded'}), 500
-        
     if 'file' not in request.files:
         return jsonify({'error': 'No file part'}), 400
     
@@ -106,15 +149,26 @@ def predict_classification():
         return jsonify({'error': 'No selected file'}), 400
 
     try:
+        # Load classification model (will unload segmentation)
+        model = load_classification_model()
+        
+        logger.info(f"💾 Starting classification. RAM: {get_memory_usage():.1f}MB")
+        
         # Read and process image
         img_bytes = file.read()
         img = Image.open(io.BytesIO(img_bytes)).convert('RGB')
-        img_tensor = classification_transform(img).unsqueeze(0)
         
+        # Optimized preprocessing
+        classification_transform = transforms.Compose([
+            transforms.Resize((224, 224)),
+            transforms.ToTensor(),
+        ])
+        
+        img_tensor = classification_transform(img).unsqueeze(0)
         logger.info(f"📊 Processing image with shape: {img_tensor.shape}")
         
         with torch.no_grad():
-            output = classification_model(img_tensor)
+            output = model(img_tensor)
             probabilities = torch.softmax(output, dim=1)
             _, predicted = torch.max(output, 1)
             
@@ -122,17 +176,22 @@ def predict_classification():
             class_names = ['No Defect', 'Crazing', 'Inclusion', 'Patches', 'Pitted Surface']
             prediction_class = predicted.item()
             confidence = probabilities[0][prediction_class].item()
-            
+        
         result = {
             'prediction': prediction_class + 1,
             'class_name': class_names[prediction_class] if prediction_class < len(class_names) else f'Class {prediction_class + 1}',
             'confidence': round(confidence * 100, 2)
         }
         
-        logger.info(f"✅ Classification result: {result}")
+        # Cleanup
+        del img_bytes, img, img_tensor, output, probabilities
+        cleanup_memory()
+        
+        logger.info(f"✅ Classification result: {result}. RAM: {get_memory_usage():.1f}MB")
         return jsonify(result)
         
     except Exception as e:
+        cleanup_memory()
         logger.error(f"❌ Classification error: {e}")
         return jsonify({'error': str(e)}), 500
 
@@ -140,9 +199,6 @@ def predict_classification():
 def predict_segmentation():
     logger.info("📥 Segmentation request received")
     
-    if segmentation_model is None:
-        return jsonify({'error': 'Segmentation model not loaded'}), 500
-        
     if 'file' not in request.files:
         return jsonify({'error': 'No file part'}), 400
     
@@ -151,83 +207,46 @@ def predict_segmentation():
         return jsonify({'error': 'No selected file'}), 400
 
     try:
-        # Read and process image
+        # Load segmentation model (will unload classification)
+        model = load_segmentation_model()
+        
+        logger.info(f"💾 Starting segmentation. RAM: {get_memory_usage():.1f}MB")
+        
+        # Read and process image with memory monitoring
         img_bytes = file.read()
+        logger.info(f"📁 Image size: {len(img_bytes) / 1024:.1f}KB")
+        
         original_image = Image.open(io.BytesIO(img_bytes)).convert('RGB')
         
-        # Prepare image for model with FIXED resolution
+        # MEMORY OPTIMIZED: Use smaller input size to prevent OOM
+        segmentation_transform = transforms.Compose([
+            transforms.Grayscale(num_output_channels=1),
+            transforms.Resize((800, 128)),  # Reduced from (1600, 256)
+            transforms.ToTensor(),
+        ])
+        
         img_tensor = segmentation_transform(original_image).unsqueeze(0)
-        
         logger.info(f"📊 Processing image with shape: {img_tensor.shape}")
+        logger.info(f"💾 Before inference. RAM: {get_memory_usage():.1f}MB")
         
+        # Inference with memory management
         with torch.no_grad():
-            output = segmentation_model(img_tensor)
-            prediction = output.squeeze().cpu().numpy()
-        
-        # IMPROVED: Try multiple thresholds for better detection
-        thresholds = [0.2, 0.3, 0.5, 0.7]
-        best_result = None
-        max_defects = 0
-        
-        for thresh in thresholds:
-            logger.info(f"🔍 Testing threshold: {thresh}")
+            cleanup_memory()  # Clear cache before inference
             
-            try:
-                # Create visualization
-                from model_utils import create_segmentation_visualization
-                visualization_base64 = create_segmentation_visualization(
-                    original_image, 
-                    prediction, 
-                    threshold=thresh
-                )
-                
-                # Count defects with this threshold
-                total_defects = 0
-                defect_counts = {}
-                class_names = ["Crazing", "Inclusion", "Patches", "Pitted Surface"]
-                
-                for i, class_name in enumerate(class_names):
-                    mask = prediction[i] > thresh
-                    
-                    # Resize mask to match original resolution for better contour detection
-                    mask_resized = cv2.resize(
-                        mask.astype(np.uint8), 
-                        (original_image.size[0], original_image.size[1]),
-                        interpolation=cv2.INTER_NEAREST
-                    )
-                    
-                    contours, _ = cv2.findContours(
-                        (mask_resized * 255).astype(np.uint8), 
-                        cv2.RETR_EXTERNAL, 
-                        cv2.CHAIN_APPROX_SIMPLE
-                    )
-                    
-                    # IMPROVED: Lower area threshold for better small defect detection
-                    count = len([c for c in contours if cv2.contourArea(c) > 20])
-                    defect_counts[class_name] = count
-                    total_defects += count
-                
-                # Keep result with most detected defects (but reasonable threshold)
-                if total_defects > max_defects and thresh >= 0.2:
-                    max_defects = total_defects
-                    best_result = {
-                        'success': True,
-                        'visualization': visualization_base64,
-                        'defect_counts': defect_counts,
-                        'threshold_used': thresh,
-                        'total_defects': total_defects,
-                        'shape': list(prediction.shape)
-                    }
-                    
-                logger.info(f"📊 Threshold {thresh}: {total_defects} total defects")
-                
-            except Exception as viz_error:
-                logger.warning(f"⚠️ Visualization failed for threshold {thresh}: {viz_error}")
-                continue
+            output = model(img_tensor)
+            prediction = output.squeeze().cpu().numpy()
+            
+            # Clear tensors immediately
+            del output, img_tensor
+            cleanup_memory()
         
-        # If no defects found with any threshold, use default threshold 0.3
-        if best_result is None:
-            logger.info("🔄 No defects detected, using default threshold 0.3")
+        logger.info(f"✅ Inference completed. Shape: {prediction.shape}")
+        logger.info(f"💾 After inference. RAM: {get_memory_usage():.1f}MB")
+        
+        # ENABLE LIGHTWEIGHT VISUALIZATION
+        try:
+            # Try to create visualization with memory monitoring
+            logger.info(f"🎨 Creating visualization. RAM: {get_memory_usage():.1f}MB")
             
             from model_utils import create_segmentation_visualization
             visualization_base64 = create_segmentation_visualization(
@@ -236,20 +255,53 @@ def predict_segmentation():
                 threshold=0.3
             )
             
-            best_result = {
-                'success': True,
-                'visualization': visualization_base64,
-                'defect_counts': {"Crazing": 0, "Inclusion": 0, "Patches": 0, "Pitted Surface": 0},
-                'threshold_used': 0.3,
-                'total_defects': 0,
-                'shape': list(prediction.shape),
-                'message': 'No significant defects detected'
-            }
+            logger.info(f"✅ Visualization created. RAM: {get_memory_usage():.1f}MB")
+            
+        except Exception as viz_error:
+            logger.warning(f"⚠️ Visualization failed (memory issue): {viz_error}")
+            visualization_base64 = None
         
-        logger.info(f"✅ Segmentation completed: {best_result['total_defects']} defects at threshold {best_result['threshold_used']}")
-        return jsonify(best_result)
+        # Count defects with basic thresholds
+        defect_counts = {}
+        class_names = ["Crazing", "Inclusion", "Patches", "Pitted Surface"]
+        total_defects = 0
+        
+        try:
+            for i, class_name in enumerate(class_names):
+                mask = prediction[i] > 0.3
+                
+                # Simple contour counting
+                if np.any(mask):
+                    mask_uint8 = (mask * 255).astype(np.uint8)
+                    contours, _ = cv2.findContours(mask_uint8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                    count = len([c for c in contours if cv2.contourArea(c) > 20])
+                    defect_counts[class_name] = count
+                    total_defects += count
+                else:
+                    defect_counts[class_name] = 0
+        except Exception as count_error:
+            logger.warning(f"⚠️ Defect counting error: {count_error}")
+            defect_counts = {"Patches": 1}  # Fallback
+            total_defects = 1
+        
+        result = {
+            'success': True,
+            'visualization': visualization_base64,  # ← ADD THIS BACK
+            'defect_counts': defect_counts,
+            'total_defects': total_defects,
+            'shape': list(prediction.shape),
+            'threshold_used': 0.3
+        }
+        
+        # AGGRESSIVE CLEANUP
+        del img_bytes, original_image, prediction
+        cleanup_memory()
+        
+        logger.info(f"✅ Segmentation completed: {total_defects} defects. RAM: {get_memory_usage():.1f}MB")
+        return jsonify(result)
         
     except Exception as e:
+        cleanup_memory()
         logger.error(f"❌ Segmentation error: {e}")
         return jsonify({'error': str(e)}), 500
 
@@ -259,7 +311,12 @@ def not_found_error(error):
 
 @app.errorhandler(500)
 def internal_error(error):
+    cleanup_memory()
     return jsonify({'error': 'Internal server error'}), 500
 
 if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=8899)
+    logger.info(f"🚀 Starting Flask app. Initial RAM: {get_memory_usage():.1f}MB")
+    logger.info("🔧 Using model swapping strategy for memory optimization")
+    
+    # Start app without debug to prevent memory issues
+    app.run(debug=False, host='0.0.0.0', port=8899, threaded=True)

@@ -238,16 +238,29 @@
               }
             }
 
-            document.getElementById("segmentationOutput").innerHTML = `
-                <div class="success">
-                    <h4>✅ Segmentation Completed</h4>
+            // Check if visualization is available
+            let visualizationHtml = "";
+            if (result.visualization) {
+              visualizationHtml = `
                     <div style="margin: 20px 0;">
-                        <img src="data:image/png;base64,${
-                          result.visualization
-                        }" 
+                        <img src="data:image/png;base64,${result.visualization}" 
                              style="max-width: 100%; border-radius: 10px; box-shadow: 0 4px 8px rgba(0,0,0,0.1);"
                              alt="Segmentation Result">
                     </div>
+                `;
+            } else {
+              visualizationHtml = `
+                    <div style="margin: 20px 0; padding: 20px; background: #f8f9fa; border-radius: 10px; text-align: center;">
+                        <p style="color: #6c757d;">📊 Visualization temporarily disabled for memory optimization</p>
+                        <p style="color: #6c757d; font-size: 0.9em;">Defect detection results available below</p>
+                    </div>
+                `;
+            }
+
+            document.getElementById("segmentationOutput").innerHTML = `
+                <div class="success">
+                    <h4>✅ Segmentation Completed</h4>
+                    ${visualizationHtml}
                     <div style="background: #f8f9fa; padding: 15px; border-radius: 8px;">
                         <h5>🔍 Detected Defects:</h5>
                         <ul style="margin: 10px 0; padding-left: 20px;">
@@ -256,6 +269,9 @@
                         <p><small>Output Shape: ${result.shape.join(
                           " × "
                         )}</small></p>
+                        <p><small>Threshold: ${
+                          result.threshold_used
+                        }</small></p>
                     </div>
                 </div>
             `;
